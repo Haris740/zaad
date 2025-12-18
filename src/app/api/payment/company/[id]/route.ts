@@ -4,7 +4,7 @@ import Records from "@/models/records";
 import { format, toZonedTime } from "date-fns-tz";
 import { NextRequest } from "next/server";
 
-const DUBAI_TIME_ZONE = 'Asia/Dubai';
+const DUBAI_TIME_ZONE = "Asia/Dubai";
 
 export async function GET(
   request: NextRequest,
@@ -14,11 +14,31 @@ export async function GET(
     await connect();
     await isPartner(request);
 
+    // ✅ Read showEmployee from query params (default = true)
+    const { searchParams } = new URL(request.url);
+    const showEmployee = searchParams.get("showEmployee") !== "false";
+
+    // ✅ Fetch records conditionally
     const records = await Records.find({
       published: true,
-      company: { _id: params.id },
+      $or: [
+        { company: params.id },
+        ...(showEmployee ? [{ employee: { $exists: true } }] : []),
+      ],
     })
-      .populate(["createdBy", "company", "employee"])
+      .populate([
+        { path: "createdBy", select: "username" },
+        { path: "company", select: "name" },
+        ...(showEmployee
+          ? [
+              {
+                path: "employee",
+                match: { company: params.id },
+                select: "name documents company",
+              },
+            ]
+          : []),
+      ])
       .sort({ createdAt: -1 });
 
     if (!records || records.length === 0) {
@@ -36,41 +56,76 @@ export async function GET(
       );
     }
 
-    const transformedData = records
-      .map((record) => {
-        const client = () => {
-          const { company, employee, self } = record;
-          return company
-            ? { name: company.name, id: company._id, type: "company" }
-            : employee
-              ? { name: employee.name, id: employee._id, type: "employee" }
-              : self
-                ? { name: self, type: "self" }
-                : null;
-        };
+    const transformedData = records.map((record) => {
+      const client = () => {
+        const { company, employee, self } = record;
 
-        const createdAtInDubai = toZonedTime(record.createdAt, DUBAI_TIME_ZONE);
+        if (showEmployee && employee) {
+          const visaDoc = employee.documents?.find(
+            (doc: any) => doc.name?.toLowerCase() === "visa"
+          );
 
-        return {
-          id: record._id,
-          type: record.type,
-          client: client(),
-          method: record.method,
-          particular: record.particular,
-          invoiceNo: record.invoiceNo,
-          amount: record.amount?.toFixed(2),
-          serviceFee: record.serviceFee?.toFixed(2),
-          creator: record?.createdBy?.username,
-          status: record.status,
-          number: record.number,
-          suffix: record.suffix,
-          date: format(createdAtInDubai, "MMM-dd hh:mma", { timeZone: DUBAI_TIME_ZONE }),
-        };
-      });
+          return {
+            type: "employee",
+            id: employee._id,
+            name: employee.name,
+            docs: employee.documents?.length || 0,
+            visaExpiry: visaDoc?.expiryDate || null,
+            visaStatus: visaDoc?.expiryDate
+              ? new Date(visaDoc.expiryDate) < new Date()
+                ? "expired"
+                : "active"
+              : "no-visa",
+          };
+        }
 
+        if (company) {
+          return {
+            type: "company",
+            id: company._id,
+            name: company.name,
+          };
+        }
+
+        if (self) {
+          return {
+            type: "self",
+            name: self,
+          };
+        }
+
+        return null;
+      };
+
+      const createdAtInDubai = toZonedTime(
+        record.createdAt,
+        DUBAI_TIME_ZONE
+      );
+
+      return {
+        id: record._id,
+        type: record.type,
+        client: client(),
+        method: record.method,
+        particular: record.particular,
+        invoiceNo: record.invoiceNo,
+        amount: record.amount?.toFixed(2),
+        serviceFee: record.serviceFee?.toFixed(2),
+        creator: record?.createdBy?.username,
+        status: record.status,
+        number: record.number,
+        suffix: record.suffix,
+        date: format(createdAtInDubai, "MMM-dd hh:mma", {
+          timeZone: DUBAI_TIME_ZONE,
+        }),
+      };
+    });
+
+    // ✅ Totals respect showEmployee
     const allRecords = await Records.find({
       published: true,
-      company: { _id: params.id },
+      company: params.id,
+      ...(showEmployee ? {} : { employee: { $exists: false } }),
     });
 
     const totalIncome = allRecords.reduce(
@@ -81,6 +136,7 @@ export async function GET(
           : 0),
       0
     );
+
     const totalExpense = allRecords.reduce(
       (acc, record) =>
         acc +
@@ -88,6 +144,7 @@ export async function GET(
         (record.serviceFee || 0),
       0
     );
+
     const balance = totalIncome - totalExpense;
     const totalTransactions = allRecords.length;
 

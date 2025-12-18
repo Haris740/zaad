@@ -369,7 +369,6 @@ const AddInvoice = ({ edit }: { edit?: string | string[] }) => {
                         </div>
                     </div>
 
-
                 </div>
 
                 <div className="flex flex-col gap-9">

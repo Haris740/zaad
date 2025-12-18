@@ -18,7 +18,6 @@ const InvoiceList = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [hasMore, setHasMore] = useState(true);
 
-
   const { data, isLoading } = useQuery({
     queryKey: ['invoices', pageNumber, searchQuery], queryFn: async () => {
       const { data } = await axios.get(`/api/invoice?page=${pageNumber}&search=${searchQuery}`)
